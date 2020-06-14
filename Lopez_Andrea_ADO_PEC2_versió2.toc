@@ -1,0 +1,13 @@
+\contentsline {section}{Abstract}{3}{section*.2}% 
+\contentsline {section}{Objetivos}{4}{section*.3}% 
+\contentsline {section}{Materiales y m\IeC {\'e}todos}{5}{section*.4}% 
+\contentsline {subsection}{Descripci\IeC {\'o}n de los materiales}{5}{section*.5}% 
+\contentsline {subsection}{M\IeC {\'e}todos: pipeline del an\IeC {\'a}lisis}{5}{section*.6}% 
+\contentsline {subsubsection}{a. Definici\IeC {\'o}n de los datos}{5}{section*.7}% 
+\contentsline {subsubsection}{b. Preprocesado: filtraje y normalizaci\IeC {\'o}n}{7}{section*.8}% 
+\contentsline {subsubsection}{c. Identificaci\IeC {\'o}n de genes diferencialmente expresados}{8}{section*.9}% 
+\contentsline {subsubsection}{d. Anotaci\IeC {\'o}n de los resultados}{10}{section*.10}% 
+\contentsline {subsubsection}{e. An\IeC {\'a}lisis de significancia biol\IeC {\'o}gica }{11}{section*.11}% 
+\contentsline {section}{Resultados}{82}{section*.12}% 
+\contentsline {section}{Discusi\IeC {\'o}n}{154}{section*.13}% 
+\contentsline {section}{Ap\IeC {\'e}ndice}{155}{section*.14}% 

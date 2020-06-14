@@ -1,0 +1,595 @@
+---
+title: 'PEC 2: ANÁLISIS DE DATOS DE ULTRASECUENCIACIÓN'
+author: "Andrea López"
+date: "14/6/2020"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+\newpage
+\tableofcontents
+\newpage
+
+\section{Abstract}
+En el estudio presentado a continuación se muestra un análisis de datos de contajes obtenidos mediante RNA-Seq para el estudio de genes diferencialmente expresados en muestras de tejido de tiroides con y sin infiltraciones. Además, los genes seleccionados están anotados y se realiza un breve análisis de significación biológica mediante términos GO. 
+
+\newpage
+\section{Objetivos}
+En este estudio se analizan datos de expresión de diferentes genes mediante el análisis de datos obtenidos por RNA-Seq. En el estudio contamos con tres grupos de muestras de tiroides divididos según el tipo de infiltración que presenten: los tejidos sin infiltración (NIT), los tejidos con pequeñas infiltraciones focalizadas (SFI) y los tejidos con infiltraciones linfoides extensas (ELI).
+El objetivo es comparar los genes diferencialmente expresados entre estos grupos de muestras de tiroides para definir patrones de alteraciones de expresión con significancia biológica, en el caso de que existan. 
+\newpage
+
+\section{Materiales y métodos}
+```{r paquetes, echo=FALSE, message=FALSE, warning= FALSE}
+if(!require(BiocManager)) install.packages("BiocManager")
+if(!require(Rsamtools)) BiocManager::install("Rsamtools")
+if(!require(GenomicFeatures)) BiocManager::install("GenomicFeatures")
+if(!require(DESeq2)) BiocManager::install("DESeq2")
+if(!require(apeglm)) BiocManager::install("apeglm")
+if(!require(BiocParallel)) BiocManager::install("BiocParallel")
+if(!require(genefilter)) BiocManager::install("genefilter")
+if(!require(org.Hs.eg.db)) BiocManager::install("org.Hs.eg.db")
+if(!require(AnnotationDbi)) BiocManager::install("AnnotationDbi")
+if(!require(ReportingTools)) BiocManager::install("ReportingTools")
+if(!require(RUVSeq)) BiocManager::install("RUVSeq")
+if(!require(sva)) BiocManager::install("sva")
+if(!require(Gviz)) BiocManager::install("Gviz")
+if(!require(magrittr)) install.packages("magrittr", dep=TRUE)
+if(!require(dplyr)) install.packages("dplyr", dep=TRUE)
+if(!require(ggplot2)) install.packages("ggplot2", dep=TRUE)
+if(!require(pheatmap)) install.packages("pheatmap", dep=TRUE)
+if(!require(RColorBrewer)) install.packages("RColorBrewer", dep=TRUE)
+if(!require(ggbeeswarm)) install.packages("ggbeeswarm", dep=TRUE)
+```
+\subsection{Descripción de los materiales}
+En este estudio trabajaré con 10 muestras aleatorias de expresión (RNA-seq) de tres tipos de tejido de tiroides distintos; not infiltrated tissues (NIT), small focal infiltrates (SFI) y extensive lymphoid infiltrates (ELI). Se realizarán tres comparaciones distintas, SFI vs NIT, ELI vs NIT y ELI vs SFI para observar los patrones de genes diferencialmente expresados entre los grupos. De cada grupo se seleccionarán 10 muestras aleatorias y se asociarán con sus respectivos counts para obtener los datos a analizar. 
+
+\subsection{Métodos: pipeline del análisis}
+\subsubsection{a. Definición de los datos}
+La selección de datos se ha hecho en base a aquellas muestras con datos de tipo RNA seq (NGS) ya que el análisis a realizar será el de genes diferencialmente expresados con Bioconductor. El dataset lo he separado en función de los tres grupos definidos; ELI, NIT y SFI. El grupo ELI solo contaba con 8 muestras de RNA Seq (NGS) por lo que se han seleccionado todas y en cuanto a NIT y SFI, he hecho la asociación de números aleatorios con las muestras, de forma que 10 muestras aleatorias de cada uno de estos grupos han sido seleccionadas. Luego he unificado los datasets de los diferentes grupos en uno de datos seleccionados que, como se puede observar en la tabla, cumplen los requisitos del ejercicio. 
+
+```{r cargar datos,echo=FALSE, warning= FALSE}
+library(readr)
+targets <- read_csv("~/Downloads/archivos targets y counts/targets.csv")
+counts <- read_delim("~/Downloads/archivos targets y counts/counts.csv", 
+    ";", escape_double = FALSE, trim_ws = TRUE)
+names(counts)[1]<-paste("ens")
+```
+```{r selección datos}
+targets_RNAseq<-targets[targets$molecular_data_type=="RNA Seq (NGS)",]
+table(targets_RNAseq$Group)
+
+targets_ELI<-targets_RNAseq[targets_RNAseq$Group=="ELI",]
+targets_NIT<-targets_RNAseq[targets_RNAseq$Group=="NIT",]
+targets_SFI<-targets_RNAseq[targets_RNAseq$Group=="SFI",]
+
+set.seed(123)
+select_sampleNIT<-sample(119,10)
+select_sampleSFI<-sample(24,10)
+
+targets_NIT_sel<-targets_NIT[select_sampleNIT,]
+targets_SFI_sel<-targets_SFI[select_sampleSFI,]
+
+targets_RNAseqS<-rbind(targets_ELI,targets_NIT_sel,targets_SFI_sel)
+table(targets_RNAseqS$Group)
+
+
+```
+A continuación, se han asociado los datos de "counts" correspondientes a las muestras seleccionadas para proceder al preprocesado y filtraje. 
+```{r asociar targets y counts, echo= FALSE, warning= FALSE}
+library(dplyr)
+counts_sel<-dplyr::select(counts,contains(targets_RNAseqS$Sample_Name))
+counts_data<-cbind(counts$ens,counts_sel)
+names(counts_data)[1]<-paste("ens")
+counts_data$ens<-substr(counts_data$ens,1,15)
+```
+Para que el análisis resulte más fácil, se han cambiado los nombres según el tipo de muestra que sean, pese a que en targets_RNAseqS se mantienen los originales para consultar (en el mismo orden). 
+```{r change names, echo =FALSE}
+targets_ELI$Sample_Name
+colnames(counts_data)[2:9]
+colnames(counts_data)[2:9]<-paste("ELI",1:8)
+colnames(counts_data)[2:9]
+
+names_NIT_sel<-targets_NIT_sel$Sample_Name
+names_NIT_sel
+colnames(counts_data)[10:19]
+colnames(counts_data)[10:19]<-paste("NIT",1:10)
+colnames(counts_data)[10:19]
+
+names_SFI_sel<-targets_SFI_sel$Sample_Name
+names_SFI_sel
+colnames(counts_data)[20:29]
+colnames(counts_data)[20:29]<-paste("SFI", 1:10)
+colnames(counts_data)[20:29]
+
+colnames(counts_sel)[1:8]<-paste("ELI",1:8)
+colnames(counts_sel)[9:18]<-paste("NIT",1:10)
+colnames(counts_sel)[19:28]<-paste("SFI", 1:10)
+```
+\subsubsection{b. Preprocesado: filtraje y normalización}
+Los datos de contajes aportados pueden requerir su normalización y filtraje y para ello, se han representado varios gráficos que ilustran su distribución. 
+A continuación encontramos el plot MDS o de escalamiento multidimensional que muestra como se distribuyen los datos en dos dimesiones. A simple vista, pese a que podemos agrupar algunos grupos en secciones características. No se observa ningún patrón claro de agrupación.
+
+```{r definir dataset}
+group<-substr(colnames(counts_sel),1,3)
+dgList <- DGEList(counts=counts_sel, genes=counts_data$ens, group = group)
+plotMDS(dgList)
+```
+Para ilustrar los datos sin normalizar se adjunta también un boxplot. 
+
+```{r boxplot , echo= FALSE, warning= FALSE}
+library(reshape)
+library(ggplot2)
+
+pseudoCount<-log2(counts_sel + 1)
+counts_logS<- melt(pseudoCount, variable_name = "Samples")
+df.countslog<-data.frame(counts_logS, Condition = substr(counts_logS$Samples, 1, 3))
+ggplot(df.countslog, aes(x = Samples, y = value, fill = Condition)) + geom_boxplot() + xlab("") +
+ylab(expression(log[2](count + 1))) 
+
+```
+Como podemos observar, los datos no están normalizados y presentan diferencias de distribución. Para disminuir la variabilidad debida a factores casuales, a continuación se filtrarán y normalizarán los datos. 
+```{r filtraje, echo= FALSE}
+countsPerMillion <- cpm(dgList)
+countCheck <- countsPerMillion > 1
+dim(dgList)
+keep <- which(rowSums(countCheck) >= 2)
+dgList <- dgList[keep,]
+dim(cpm(dgList))
+```
+Para el filtraje, se eliminan aquellos genes cuyos contajes por millón sean inferiores a 1 y se mantienen todos aquellos mayores o iguales a 2. Con este filtro nos permitimos eliminar aquellos genes cuya secuenciación no haya resultado fructífera y que por lo tanto, no tendrán relevancia en un análisis de genes diferencialmente expresados. Como se puede observar, el número de genes después del filtraje pasa de los 56202 totales a 19388, reduciendo el número de genes a analizar en futuros pasos. 
+
+Una vez filtrados, los resultados de los genes seleccionados son normalizados mediante el método "Trimmed Mean of M-values" en el que las observaciones o muestras que tienen las expressiones medias más cerca de la media de todas las muestras son consideradas como "referencia" y todas las demás, muestras test. En este caso para cada muestra de test, el factor de escalada calculado para la normalización se basa en el peso de la media de los log ratio entre el test y la referencia, retirando de un conjunto de genes aquellos que están mucho más o mucho menos expressados y los que tienen mayores y menores log ratios. 
+
+```{r normalización, echo= FALSE}
+dgList <- calcNormFactors(dgList, method="TMM")
+plotMDS(dgList)
+```
+Como podemos observar, la distribución de los datos en dos dimensiones varía ligeramente con y sin normalización. Para ilustrarlo mejor, se adjuntan dos gráficos de intensidad en los que se muestran las diferencias entre los datos filtrados y normalizados, así como las diferencias de distribución de densidades de datos de contajes crudos y normalizados.  
+```{r plot density, echo= FALSE}
+library(edgeR)
+library(limma)
+keep<- rowSums(counts_sel) > 0
+counts_filt<-pseudoCount[keep, ]
+counts_norm<-cpm(counts_filt, normalized.lib.sized= TRUE)
+par(mfrow=c(2,1))
+plotDensities(counts_filt, group = substr(colnames(counts_norm),1,3), main = "Distribución de datos filtrados")
+plotDensities(counts_norm, group = substr(colnames(counts_norm),1,3), main= "Distribución de datos normalizados")
+
+```
+```{r density norm, echo=FALSE}
+df.norm<- melt(counts_norm, variable_name = "X2")
+df.norm<-data.frame(df.norm, Condition = substr(df.norm$X2, 1, 3))
+par(mfrow=c(2,1))
+ggplot(df.countslog, aes(x = value, colour = Samples, fill = Samples, main= "Distribución de datos crudos")) + ylim(c(0, 0.25)) +
+geom_density(alpha = 0.2, size = 1.25) + facet_wrap(~ Condition) +
+theme(legend.position = "top") + xlab(expression(log[2](count + 1)))
+ggplot(df.norm, aes(x = value, colour = X2, fill = X2, main= "Distribución de datos normalizados")) +
+geom_density(alpha = 0.2, size = 1.25) + facet_wrap(~ Condition) +
+theme(legend.position = "top") + xlab("pseudocounts")
+```
+Una vez acabado el pre-procesado de los datos, se puede describir el modelo para definir los genes diferencialmente expresados. 
+
+\subsubsection{c. Identificación de genes diferencialmente expresados}
+El análisis de genes diferencialmente expresados lo he realizado con EdgeR, creando un objeto DGE a partir del cuál he realizado el análisis de genes diferencialmente expresados, especificando las tres comparaciones de interés, NIT vs ELI, NIT vs SFI y SFI vs ELI. 
+
+```{r dif expresados}
+#En un principio se define la matriz de diseño en la que se basará el análisis.
+designMat <- model.matrix(~group)
+#En función de esta matriz se hace un análisis de dispersiones gracias al cual obtenemos un gráfico de distribución de estas. 
+dgList <- estimateGLMCommonDisp(dgList, design=designMat)
+dgList <- estimateGLMTrendedDisp(dgList, design=designMat)
+dgList <- estimateGLMTagwiseDisp(dgList, design=designMat)
+plotBCV(dgList, main= "Dispersión de las muestras normalizadas")
+#Una vez calculadas las dispersiones, se procede al modelo de análisis de genes diferencialmente expresados basado en la matriz de diseño.
+fit<-glmFit(dgList,designMat)
+```
+En el gráfico se muestra la dispersión de las muestras normalizadas en el modelo, lo que nos muestra los valores más comunes así como la tendencia, valores entre los cuales de muestran diferencias, lo que demuestra que el modelo comprende genes diferencialmente expresados. 
+```{r dif exp NIT vs ELI, echo =FALSE}
+#Comparación NIT vs ELI
+lrt2vs1 <- glmLRT(fit, coef=2)
+edgeR_result2vs1 <- topTags(lrt2vs1)
+edgeR_result2vs1
+deGenes2vs1 <- decideTestsDGE(lrt2vs1, p=0.001)
+deGenes2vs1 <- rownames(lrt2vs1)[as.logical(deGenes2vs1)]
+plotSmear(lrt2vs1, de.tags=deGenes2vs1)
+abline(h=c(-1, 1), col=2)
+```
+En la tabla se muestran los genes diferencialmente epxresados entre las muestras ELI y NIT con sus p-valores sin y con ajuste (FDR) y ordenados de más significativo a menos. En el gráfico se representa las veces que la expresión de un gen es mayor o menor en base a la referencia en función de la media de contajes por millón, lo que nos permite ver que algunos se expresan con "fold-changes" de entre -10 y 5, lo que nos muestra que a modo general que la expresión de los genes seleccionados es menor en las muestras NIT que ELI. Como podemos observar, las mayores diferencias se encuentran entre los genes cuyos contajes por millón son más bajos. 
+```{r dif exp SFI vs ELI, echo=FALSE}
+#Comparación SFI vs ELI
+lrt3vs1 <- glmLRT(fit, coef=3)
+edgeR_result3vs1 <- topTags(lrt3vs1)
+edgeR_result3vs1
+deGenes3vs1 <- decideTestsDGE(lrt3vs1, p=0.001)
+deGenes3vs1 <- rownames(lrt3vs1)[as.logical(deGenes3vs1)]
+plotSmear(lrt3vs1, de.tags=deGenes3vs1)
+abline(h=c(-1, 1), col=2)
+```
+En la tabla se muestran los genes diferencialmente epxresados entre las muestras ELI y SFI con sus p-valores sin y con ajuste (FDR) y ordenados de más significativo a menos. En el gráfico se representa las veces que la expresión de un gen es mayor o menor en base a la referencia en función de la media de contajes por millón., lo que nos permite ver que algunos se expresan con "fold-changes" de entre -5 y 5, lo que nos muestra el tamaño de la diferencia de expresión. Como podemos observar, las mayores diferencias se encuentran entre los genes cuyos contajes por millón son más bajos. 
+```{r dif exp SFI vs NIT, echo =FALSE}
+#Comparación SFI vs NIT
+lrt3vs2 <- glmLRT(fit,contrast=c(0,-1,1))
+edgeR_result3vs2 <- topTags(lrt3vs2)
+edgeR_result3vs2
+deGenes3vs2 <- decideTestsDGE(lrt3vs2, p=0.001)
+deGenes3vs2 <- rownames(lrt3vs2)[as.logical(deGenes3vs2)]
+plotSmear(lrt3vs2, de.tags=deGenes3vs2)
+abline(h=c(-1, 1), col=2)
+```
+En la tabla se muestran los genes diferencialmente epxresados entre las muestras SFI y NIT con sus p-valores sin y con ajuste (FDR) y ordenados de más significativo a menos. En el gráfico se representa las veces que la expresión de un gen es mayor o menor en base a la referencia en función de la media de contajes por millón., lo que nos permite ver que algunos se expresan con "fold-changes" de entre -4 y 8, lo que nos indica que generalmente los genes seleccionados están sobreexpresados en las muestras NIT comparadas con las SFI. Como podemos observar, las mayores diferencias se encuentran entre los genes cuyos contajes por millón son más bajos. 
+
+\subsubsection{d. Anotación de los resultados}
+Para la anotación he elegido mapIds para relacionar los términos de ENSEMBL de los genes diferencialmente expresados con mayor significancia estadística con sus respectivos símbolos y EntrezID. En las tablas siguientes se muestran, por orden, los genes de las comparaciones NIT vs ELI, SFI vs ELI y SFI vs NIT. 
+```{r anot NIT vs ELI, echo=FALSE, warning =FALSE}
+edgeR_result2vs1$table$symbol <- mapIds(org.Hs.eg.db,
+                     keys=edgeR_result2vs1$table$genes,
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+edgeR_result2vs1$table$entrez <- mapIds(org.Hs.eg.db,
+                     keys=edgeR_result2vs1$table$genes,
+                     column="ENTREZID",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+resOrdered2vs1 <- edgeR_result2vs1[order(edgeR_result2vs1$table$PValue),]
+head(resOrdered2vs1)
+```
+```{r anot SFI vs ELI, echo=FALSE, warning =FALSE}
+edgeR_result3vs1$table$symbol <- mapIds(org.Hs.eg.db,
+                     keys=edgeR_result3vs1$table$genes,
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+edgeR_result3vs1$table$entrez <- mapIds(org.Hs.eg.db,
+                     keys=edgeR_result3vs1$table$genes,
+                     column="ENTREZID",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+resOrdered3vs1 <- edgeR_result3vs1[order(edgeR_result3vs1$table$PValue),]
+head(resOrdered3vs1)
+```
+```{r anot SFI vs NIT, echo=FALSE, warning =FALSE}
+edgeR_result3vs2$table$symbol <- mapIds(org.Hs.eg.db,
+                     keys=edgeR_result3vs2$table$genes,
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+edgeR_result3vs2$table$entrez <- mapIds(org.Hs.eg.db,
+                     keys=edgeR_result3vs2$table$genes,
+                     column="ENTREZID",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+resOrdered3vs2 <- edgeR_result2vs1[order(edgeR_result3vs2$table$PValue),]
+head(resOrdered3vs2)
+```
+\subsubsection{e. Análisis de significancia biológica }
+
+```{r gene enrich tot, echo=FALSE}
+library("clusterProfiler")
+listOfTables <- list(NITvsELI = edgeR_result2vs1$table, SFIvsELI = edgeR_result3vs1$table, SFIvsNIT = edgeR_result3vs2$table)
+all_res<-rbind(edgeR_result2vs1$table, edgeR_result3vs1$table, edgeR_result3vs2$table)
+eg.all <- enrichGO(gene         = all_res$genes,
+                OrgDb         = org.Hs.eg.db,
+                keyType       = 'ENSEMBL',
+                ont           = "BP",
+                pAdjustMethod = "fdr",
+                pvalueCutoff  = 0.01,
+                qvalueCutoff  = 0.05)
+eg.all@result
+
+```
+```{r  gene enrich NIT vs ELI, echo= FALSE}
+res.2vs1<-as.data.frame(edgeR_result2vs1$table)
+eg.2vs1 <- enrichGO(gene         = res.2vs1$genes,
+                OrgDb         = org.Hs.eg.db,
+                keyType       = 'ENSEMBL',
+                ont           = "BP",
+                pAdjustMethod = "fdr",
+                pvalueCutoff  = 0.01,
+                qvalueCutoff  = 0.05)
+eg.2vs1@result
+```
+
+```{r gene enrich SFI vs ELI, echo=FALSE}
+res.3vs1<-as.data.frame(edgeR_result3vs1$table)
+eg.3vs1 <- enrichGO(gene         = res.3vs1$genes,
+                OrgDb         = org.Hs.eg.db,
+                keyType       = 'ENSEMBL',
+                ont           = "BP",
+                pAdjustMethod = "fdr",
+                pvalueCutoff  = 0.01,
+                qvalueCutoff  = 0.05)
+eg.3vs1@result
+```
+
+```{r gene enrich SFI vs NIT, echo=FALSE}
+res.3vs2<-as.data.frame(edgeR_result3vs2$table)
+eg.3vs2 <- enrichGO(gene         = res.3vs2$genes,
+                OrgDb         = org.Hs.eg.db,
+                keyType       = 'ENSEMBL',
+                ont           = "BP",
+                pAdjustMethod = "fdr",
+                pvalueCutoff  = 0.01,
+                qvalueCutoff  = 0.05)
+eg.3vs2@result
+```
+
+\newpage
+\section{Resultados}
+Los resultados de las tres comparaciones estudiadas: tejidos sin infiltración (NIT) vs tejidos con infiltración leucocitaria extensa (ELI), tejidos con infiltración focal pequeña (SFI) vs tejidos con infiltración leucocitaria extensa (ELI) y tejidos sin infiltración (NIT) vs tejidos con infiltración focal pequeña, nos muestran grupos de genes diferencialmente expresados cuyos procesos biológicos están, en gran parte, relacionados entre ellos. 
+
+A nivel de análisis de significancia biológica general, me parece interesante recalcar los resultados de la siguiente tabla: 
+```{r table enrich all, echo=FALSE}
+eg.all@result
+```
+Como podemos observar, la mayoría de los genes seleccionados como diferencialmente expresados en todas las comparaciones están relacionados directamente con la activación de funciones relacionadas con el sistema immuno como la vía del receptor de células B, su activación, diferenciación o regulación de la inmunidad humoral, lo que tiene sentido dadas las muestras utilizadas para el estudio. 
+
+Si a nivel más específico analizamos la comparación NIT vs ELI, observamos que los cambios entre muestras sin infiltraciones y aquellas con infiltraciones extensas son bastante grandes a nivel de "fold-changes" de expresión, representada mediante los datos de contaje. El nivel de veces que la expresión varia de un grupo a otro de muestras para los genes con un p-valor más significativo es de entre 4 a 8 veces menos expresión. Aplicando la significancia biológica de estas diferencias, observamos que estos cambios además se asocian con la regulación celular del calcio y, una vez más, la activación, diferenciación y señalización de células B. 
+```{r table NIT vs ELI, echo= FALSE}
+head(resOrdered2vs1)
+eg.2vs1@result
+```
+En cuanto a la siguiente comparación, de muestras con pequeñas y extensas infiltraciones observamos que la magnitud de la diferencia no es tan superior como en la anterior comparación así como el nivel de significatividad estadística de estas. De forma similar, el análisis de significancia biológica nos muestra cambios también a nivel de sistema immune, esta vez más centrados en la regulación de la respuesta humanoral, así como las células B, T y adhesión leucocitaria. 
+```{r table SFI vs ELI, echo= FALSE}
+head(resOrdered3vs1)
+eg.3vs1@result
+```
+Por último, la comparación entre muestras sin infiltraciones así como con infiltraciones pequeñas focales muestra cambios de magnitud más parecidas al primero, es decir, en general a nivel de expresión génica difieren más los tejidos sin infiltraciones con los infiltrados, independientemente del tamaño de estas, que los tejidos con infiltraciones entre ellos. En este caso los cambios también están asociados con procesos del sistema immune así como regulación de la proliferación y activación de células B y producción de immunoglobulinas. 
+```{r table SFI vs NIT, echo= FALSE}
+head(resOrdered3vs2)
+eg.3vs2@result
+```
+\newpage
+\section{Discusión}
+Como discusión me gustaría añadir simplemente que el estudio me ha parecido muy completo pese a que yo no he sabido sacarle todo el provecho posible. Me he encontrado dificultades a la hora de seleccionar todo el conjunto de genes diferencialmente expresados de cada comparación, así como un análisis más extenso de estos, conocimiento que espero poder seguir adquiriendo aún acabada la asignatura. 
+A nivel de aspectos generales de la práctica, creo que los datos del estudio son suficientemente claros y bien representados como para llevar a cabo el análisis sin mayor problemática. 
+
+\newpage
+\section{Apéndice}
+
+Enlace a repositorio: https://github.com/andrealopmar/ADO-PEC2.git
+
+
+```{r código completo, results= "hide", warning= FALSE}
+
+#Selección de datos
+targets_RNAseq<-targets[targets$molecular_data_type=="RNA Seq (NGS)",]
+table(targets_RNAseq$Group)
+
+targets_ELI<-targets_RNAseq[targets_RNAseq$Group=="ELI",]
+targets_NIT<-targets_RNAseq[targets_RNAseq$Group=="NIT",]
+targets_SFI<-targets_RNAseq[targets_RNAseq$Group=="SFI",]
+
+set.seed(123)
+select_sampleNIT<-sample(119,10)
+select_sampleSFI<-sample(24,10)
+
+targets_NIT_sel<-targets_NIT[select_sampleNIT,]
+targets_SFI_sel<-targets_SFI[select_sampleSFI,]
+
+targets_RNAseqS<-rbind(targets_ELI,targets_NIT_sel,targets_SFI_sel)
+table(targets_RNAseqS$Group)
+
+#Asociar targets y counts
+library(dplyr)
+counts_sel<-dplyr::select(counts,contains(targets_RNAseqS$Sample_Name))
+counts_data<-cbind(counts$ens,counts_sel)
+names(counts_data)[1]<-paste("ens")
+counts_data$ens<-substr(counts_data$ens,1,15)
+
+#Change names
+targets_ELI$Sample_Name
+colnames(counts_data)[2:9]
+colnames(counts_data)[2:9]<-paste("ELI",1:8)
+colnames(counts_data)[2:9]
+
+names_NIT_sel<-targets_NIT_sel$Sample_Name
+names_NIT_sel
+colnames(counts_data)[10:19]
+colnames(counts_data)[10:19]<-paste("NIT",1:10)
+colnames(counts_data)[10:19]
+
+names_SFI_sel<-targets_SFI_sel$Sample_Name
+names_SFI_sel
+colnames(counts_data)[20:29]
+colnames(counts_data)[20:29]<-paste("SFI", 1:10)
+colnames(counts_data)[20:29]
+
+colnames(counts_sel)[1:8]<-paste("ELI",1:8)
+colnames(counts_sel)[9:18]<-paste("NIT",1:10)
+colnames(counts_sel)[19:28]<-paste("SFI", 1:10)
+
+#Definir dataset
+group<-substr(colnames(counts_sel),1,3)
+dgList <- DGEList(counts=counts_sel, genes=counts_data$ens, group = group)
+plotMDS(dgList)
+
+#Boxplot 
+library(reshape)
+library(ggplot2)
+
+pseudoCount<-log2(counts_sel + 1)
+counts_logS<- melt(pseudoCount, variable_name = "Samples")
+df.countslog<-data.frame(counts_logS, Condition = substr(counts_logS$Samples, 1, 3))
+ggplot(df.countslog, aes(x = Samples, y = value, fill = Condition)) + geom_boxplot() + xlab("") +
+ylab(expression(log[2](count + 1))) 
+
+#Filtraje
+countsPerMillion <- cpm(dgList)
+countCheck <- countsPerMillion > 1
+dim(dgList)
+keep <- which(rowSums(countCheck) >= 2)
+dgList <- dgList[keep,]
+dim(cpm(dgList))
+
+#Normalización
+dgList <- calcNormFactors(dgList, method="TMM")
+plotMDS(dgList)
+
+#Plot density
+library(edgeR)
+library(limma)
+keep<- rowSums(counts_sel) > 0
+counts_filt<-pseudoCount[keep, ]
+counts_norm<-cpm(counts_filt, normalized.lib.sized= TRUE)
+par(mfrow=c(2,1))
+plotDensities(counts_filt, group = substr(colnames(counts_norm),1,3), main = "Distribución de datos filtrados")
+plotDensities(counts_norm, group = substr(colnames(counts_norm),1,3), main= "Distribución de datos normalizados")
+
+#Density norm
+df.norm<- melt(counts_norm, variable_name = "X2")
+df.norm<-data.frame(df.norm, Condition = substr(df.norm$X2, 1, 3))
+par(mfrow=c(2,1))
+ggplot(df.countslog, aes(x = value, colour = Samples, fill = Samples, main= "Distribución de datos crudos")) + ylim(c(0, 0.25)) +
+geom_density(alpha = 0.2, size = 1.25) + facet_wrap(~ Condition) +
+theme(legend.position = "top") + xlab(expression(log[2](count + 1)))
+ggplot(df.norm, aes(x = value, colour = X2, fill = X2, main= "Distribución de datos normalizados")) +
+geom_density(alpha = 0.2, size = 1.25) + facet_wrap(~ Condition) +
+theme(legend.position = "top") + xlab("pseudocounts")
+
+#Dif expresados
+designMat <- model.matrix(~group)
+dgList <- estimateGLMCommonDisp(dgList, design=designMat)
+dgList <- estimateGLMTrendedDisp(dgList, design=designMat)
+dgList <- estimateGLMTagwiseDisp(dgList, design=designMat)
+plotBCV(dgList, main= "Dispersión de las muestras normalizadas")
+fit<-glmFit(dgList,designMat)
+
+#Comparación NIT vs ELI
+lrt2vs1 <- glmLRT(fit, coef=2)
+edgeR_result2vs1 <- topTags(lrt2vs1)
+edgeR_result2vs1
+deGenes2vs1 <- decideTestsDGE(lrt2vs1, p=0.001)
+deGenes2vs1 <- rownames(lrt2vs1)[as.logical(deGenes2vs1)]
+plotSmear(lrt2vs1, de.tags=deGenes2vs1)
+abline(h=c(-1, 1), col=2)
+
+#Comparación SFI vs ELI
+lrt3vs1 <- glmLRT(fit, coef=3)
+edgeR_result3vs1 <- topTags(lrt3vs1)
+edgeR_result3vs1
+deGenes3vs1 <- decideTestsDGE(lrt3vs1, p=0.001)
+deGenes3vs1 <- rownames(lrt3vs1)[as.logical(deGenes3vs1)]
+plotSmear(lrt3vs1, de.tags=deGenes3vs1)
+abline(h=c(-1, 1), col=2)
+
+#Comparación SFI vs NIT
+lrt3vs2 <- glmLRT(fit,contrast=c(0,-1,1))
+edgeR_result3vs2 <- topTags(lrt3vs2)
+edgeR_result3vs2
+deGenes3vs2 <- decideTestsDGE(lrt3vs2, p=0.001)
+deGenes3vs2 <- rownames(lrt3vs2)[as.logical(deGenes3vs2)]
+plotSmear(lrt3vs2, de.tags=deGenes3vs2)
+abline(h=c(-1, 1), col=2)
+
+#Anot NIT vs ELI
+edgeR_result2vs1$table$symbol <- mapIds(org.Hs.eg.db,
+                     keys=edgeR_result2vs1$table$genes,
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+edgeR_result2vs1$table$entrez <- mapIds(org.Hs.eg.db,
+                     keys=edgeR_result2vs1$table$genes,
+                     column="ENTREZID",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+resOrdered2vs1 <- edgeR_result2vs1[order(edgeR_result2vs1$table$PValue),]
+head(resOrdered2vs1)
+
+#Anot SFI vs ELI
+edgeR_result3vs1$table$symbol <- mapIds(org.Hs.eg.db,
+                     keys=edgeR_result3vs1$table$genes,
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+edgeR_result3vs1$table$entrez <- mapIds(org.Hs.eg.db,
+                     keys=edgeR_result3vs1$table$genes,
+                     column="ENTREZID",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+resOrdered3vs1 <- edgeR_result3vs1[order(edgeR_result3vs1$table$PValue),]
+head(resOrdered3vs1)
+
+#Anot SFI vs NIT
+edgeR_result3vs2$table$symbol <- mapIds(org.Hs.eg.db,
+                     keys=edgeR_result3vs2$table$genes,
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+edgeR_result3vs2$table$entrez <- mapIds(org.Hs.eg.db,
+                     keys=edgeR_result3vs2$table$genes,
+                     column="ENTREZID",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+
+resOrdered3vs2 <- edgeR_result2vs1[order(edgeR_result3vs2$table$PValue),]
+head(resOrdered3vs2)
+
+#Gene enrich tot
+library("clusterProfiler")
+listOfTables <- list(NITvsELI = edgeR_result2vs1$table, SFIvsELI = edgeR_result3vs1$table, SFIvsNIT = edgeR_result3vs2$table)
+all_res<-rbind(edgeR_result2vs1$table, edgeR_result3vs1$table, edgeR_result3vs2$table)
+eg.all <- enrichGO(gene         = all_res$genes,
+                OrgDb         = org.Hs.eg.db,
+                keyType       = 'ENSEMBL',
+                ont           = "BP",
+                pAdjustMethod = "fdr",
+                pvalueCutoff  = 0.01,
+                qvalueCutoff  = 0.05)
+eg.all@result
+
+#Gene enrich NIT vs ELI
+res.2vs1<-as.data.frame(edgeR_result2vs1$table)
+eg.2vs1 <- enrichGO(gene         = res.2vs1$genes,
+                OrgDb         = org.Hs.eg.db,
+                keyType       = 'ENSEMBL',
+                ont           = "BP",
+                pAdjustMethod = "fdr",
+                pvalueCutoff  = 0.01,
+                qvalueCutoff  = 0.05)
+eg.2vs1@result
+
+#Gene enrich SFI vs ELI
+res.3vs1<-as.data.frame(edgeR_result3vs1$table)
+eg.3vs1 <- enrichGO(gene         = res.3vs1$genes,
+                OrgDb         = org.Hs.eg.db,
+                keyType       = 'ENSEMBL',
+                ont           = "BP",
+                pAdjustMethod = "fdr",
+                pvalueCutoff  = 0.01,
+                qvalueCutoff  = 0.05)
+eg.3vs1@result
+
+#Gene enrich SFI vs NIT
+res.3vs2<-as.data.frame(edgeR_result3vs2$table)
+eg.3vs2 <- enrichGO(gene         = res.3vs2$genes,
+                OrgDb         = org.Hs.eg.db,
+                keyType       = 'ENSEMBL',
+                ont           = "BP",
+                pAdjustMethod = "fdr",
+                pvalueCutoff  = 0.01,
+                qvalueCutoff  = 0.05)
+eg.3vs2@result
+
+
+```
+
+
+```
+
+
+```
+
+
+
+
+```
+
+
